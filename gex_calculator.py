@@ -25,7 +25,7 @@ class BlackScholesCalculator:
         return delta
 
 class EnhancedGEXDEXCalculator:
-    """GEX/DEX Calculator - Auto fallback to demo data"""
+    """GEX/DEX Calculator using DhanHQ Rolling Options API"""
     
     def __init__(self, client_id=None, access_token=None, risk_free_rate=0.07):
         self.risk_free_rate = risk_free_rate
@@ -33,211 +33,149 @@ class EnhancedGEXDEXCalculator:
         self.client_id = str(client_id).strip() if client_id else None
         self.access_token = str(access_token).strip() if access_token else None
         self.base_url = "https://api.dhan.co/v2"
-        self.use_demo = False
         
         if self.client_id and self.access_token:
-            print(f"✅ DhanHQ configured | Client: {self.client_id}")
+            print(f"✅ DhanHQ Rolling Options API configured")
     
-    def generate_realistic_demo_data(self, symbol="NIFTY", underlying_price=None):
-        """Generate realistic demo option chain"""
+    def get_rolling_option_data(self, security_id, strike_offset, option_type, days_back=1):
+        """Fetch rolling options data for a specific strike"""
         
-        if underlying_price is None:
-            defaults = {"NIFTY": 24500, "BANKNIFTY": 52000, "FINNIFTY": 22500, "MIDCPNIFTY": 12000}
-            underlying_price = defaults.get(symbol, 24500)
+        url = f"{self.base_url}/charts/rollingoption"
         
-        print(f"📊 Generating demo data for {symbol} @ ₹{underlying_price:,.0f}")
+        headers = {
+            "access-token": self.access_token,
+            "client-id": self.client_id,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
         
-        # Generate strikes
-        strikes = []
-        for i in range(-25, 26):
-            strike = int((underlying_price + i * 100) / 100) * 100
-            strikes.append(strike)
+        # Get date range (last trading day)
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=days_back)
         
-        demo_data = []
-        
-        for strike in strikes:
-            distance = abs(strike - underlying_price)
-            atm_factor = np.exp(-distance / 500)
-            
-            # Realistic OI
-            call_oi = int(np.random.uniform(100000, 800000) * atm_factor + 50000)
-            put_oi = int(np.random.uniform(100000, 800000) * atm_factor + 50000)
-            
-            # Realistic IV
-            base_iv = 12 + (distance / 100) * 0.8
-            call_iv = base_iv + np.random.uniform(-1, 2)
-            put_iv = base_iv + np.random.uniform(-1, 2)
-            
-            # Realistic LTP based on moneyness
-            if strike < underlying_price:
-                # ITM calls, OTM puts
-                call_ltp = (underlying_price - strike) + np.random.uniform(10, 100) * atm_factor
-                put_ltp = np.random.uniform(5, 30) * (1 - atm_factor)
-            elif strike > underlying_price:
-                # OTM calls, ITM puts
-                call_ltp = np.random.uniform(5, 30) * (1 - atm_factor)
-                put_ltp = (strike - underlying_price) + np.random.uniform(10, 100) * atm_factor
-            else:
-                # ATM
-                call_ltp = np.random.uniform(150, 250)
-                put_ltp = np.random.uniform(150, 250)
-            
-            call_ltp = max(0.5, call_ltp)
-            put_ltp = max(0.5, put_ltp)
-            
-            # Realistic volume
-            call_volume = int(np.random.uniform(5000, 150000) * atm_factor + 1000)
-            put_volume = int(np.random.uniform(5000, 150000) * atm_factor + 1000)
-            
-            demo_data.append({
-                'Strike': strike,
-                'Call_OI': call_oi,
-                'Call_IV': call_iv / 100,
-                'Call_LTP': call_ltp,
-                'Call_Volume': call_volume,
-                'Put_OI': put_oi,
-                'Put_IV': put_iv / 100,
-                'Put_LTP': put_ltp,
-                'Put_Volume': put_volume
-            })
-        
-        # Generate next Thursday expiry
-        today = datetime.now()
-        days_ahead = (3 - today.weekday()) % 7
-        if days_ahead == 0:
-            days_ahead = 7
-        next_thursday = today + timedelta(days=days_ahead)
-        expiry = next_thursday.strftime('%Y-%m-%d')
-        
-        print(f"✅ Generated {len(demo_data)} demo strikes")
-        
-        return demo_data, [expiry], expiry, underlying_price
-    
-    def try_dhanhq_api(self, symbol, expiry_index):
-        """Try to fetch from DhanHQ API"""
+        payload = {
+            "exchangeSegment": "NSE_FNO",
+            "interval": "1",
+            "securityId": security_id,
+            "instrument": "OPTIDX",
+            "expiryFlag": "WEEK",
+            "expiryCode": 0,
+            "strike": strike_offset,
+            "drvOptionType": option_type,
+            "requiredData": ["open", "high", "low", "close", "volume", "oi", "iv", "strike", "spot"],
+            "fromDate": from_date.strftime('%Y-%m-%d'),
+            "toDate": to_date.strftime('%Y-%m-%d')
+        }
         
         try:
-            security_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 29}
-            security_id = security_map.get(symbol, 13)
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
             
-            # Try expiry list
-            url = f"{self.base_url}/optionchain/expirylist"
-            headers = {
-                "access-token": self.access_token,
-                "client-id": self.client_id,
-                "Content-Type": "application/json"
-            }
-            payload = {"UnderlyingScrip": int(security_id), "UnderlyingSeg": "IDX_I"}
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
+            if response.status_code == 200:
+                return response.json()
+            else:
                 return None
-            
-            data = response.json()
-            if data.get('status') != 'success' or 'data' not in data:
-                return None
-            
-            expiries = data['data']
-            if not expiries:
-                return None
-            
-            if expiry_index >= len(expiries):
-                expiry_index = 0
-            
-            selected_expiry = expiries[expiry_index]
-            
-            # Try option chain
-            url = f"{self.base_url}/optionchain"
-            payload = {
-                "UnderlyingScrip": int(security_id),
-                "UnderlyingSeg": "IDX_I",
-                "Expiry": str(selected_expiry)
-            }
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                return None
-            
-            data = response.json()
-            if 'data' not in data:
-                return None
-            
-            # Parse
-            parsed_data = []
-            underlying_ltp = data['data'].get('last_price', 0)
-            oc = data['data'].get('oc', {})
-            
-            for strike_str, strike_data in oc.items():
-                try:
-                    strike = float(strike_str)
-                    ce = strike_data.get('ce', {})
-                    pe = strike_data.get('pe', {})
-                    
-                    parsed_data.append({
-                        'Strike': strike,
-                        'Call_OI': int(ce.get('oi', 0)),
-                        'Call_IV': float(ce.get('implied_volatility', 15)) / 100,
-                        'Call_LTP': float(ce.get('last_price', 0)),
-                        'Call_Volume': int(ce.get('volume', 0)),
-                        'Put_OI': int(pe.get('oi', 0)),
-                        'Put_IV': float(pe.get('implied_volatility', 15)) / 100,
-                        'Put_LTP': float(pe.get('last_price', 0)),
-                        'Put_Volume': int(pe.get('volume', 0))
-                    })
-                except:
-                    continue
-            
-            if parsed_data and underlying_ltp > 0:
-                print(f"✅ DhanHQ API success!")
-                return parsed_data, expiries, selected_expiry, underlying_ltp
-            
-            return None
-            
+                
         except:
             return None
     
+    def fetch_multiple_strikes(self, security_id, strikes_range=10):
+        """Fetch data for multiple strikes around ATM"""
+        
+        all_strikes_data = []
+        
+        print(f"📊 Fetching rolling options data...")
+        
+        # Fetch for multiple strikes
+        strike_offsets = []
+        strike_offsets.append("ATM")
+        for i in range(1, strikes_range + 1):
+            strike_offsets.append(f"ATM+{i}")
+            strike_offsets.append(f"ATM-{i}")
+        
+        underlying_price = None
+        
+        for offset in strike_offsets:
+            # Fetch CALL data
+            call_data = self.get_rolling_option_data(security_id, offset, "CALL", days_back=2)
+            
+            # Fetch PUT data
+            put_data = self.get_rolling_option_data(security_id, offset, "PUT", days_back=2)
+            
+            if call_data and 'data' in call_data and call_data['data'].get('ce'):
+                ce = call_data['data']['ce']
+                
+                # Get latest values (last timestamp)
+                if ce.get('strike') and len(ce['strike']) > 0:
+                    strike = ce['strike'][-1]
+                    
+                    # Get spot price (underlying)
+                    if ce.get('spot') and len(ce['spot']) > 0 and underlying_price is None:
+                        underlying_price = ce['spot'][-1]
+                    
+                    call_oi = ce['oi'][-1] if ce.get('oi') and len(ce['oi']) > 0 else 0
+                    call_iv = ce['iv'][-1] if ce.get('iv') and len(ce['iv']) > 0 else 15
+                    call_ltp = ce['close'][-1] if ce.get('close') and len(ce['close']) > 0 else 0
+                    call_volume = ce['volume'][-1] if ce.get('volume') and len(ce['volume']) > 0 else 0
+                    
+                    # Get PUT data
+                    put_oi = 0
+                    put_iv = 15
+                    put_ltp = 0
+                    put_volume = 0
+                    
+                    if put_data and 'data' in put_data and put_data['data'].get('ce'):
+                        pe = put_data['data']['ce']
+                        put_oi = pe['oi'][-1] if pe.get('oi') and len(pe['oi']) > 0 else 0
+                        put_iv = pe['iv'][-1] if pe.get('iv') and len(pe['iv']) > 0 else 15
+                        put_ltp = pe['close'][-1] if pe.get('close') and len(pe['close']) > 0 else 0
+                        put_volume = pe['volume'][-1] if pe.get('volume') and len(pe['volume']) > 0 else 0
+                    
+                    all_strikes_data.append({
+                        'Strike': float(strike),
+                        'Call_OI': int(call_oi),
+                        'Call_IV': float(call_iv) / 100 if call_iv > 1 else float(call_iv),
+                        'Call_LTP': float(call_ltp),
+                        'Call_Volume': int(call_volume),
+                        'Put_OI': int(put_oi),
+                        'Put_IV': float(put_iv) / 100 if put_iv > 1 else float(put_iv),
+                        'Put_LTP': float(put_ltp),
+                        'Put_Volume': int(put_volume)
+                    })
+        
+        return all_strikes_data, underlying_price
+    
     def fetch_and_calculate_gex_dex(self, symbol="NIFTY", strikes_range=12, expiry_index=0):
-        """Main calculation with auto-fallback"""
+        """Main calculation using Rolling Options API"""
         
         try:
-            print(f"🔄 Fetching {symbol}...")
+            print(f"🔄 Fetching {symbol} using Rolling Options API...")
             
-            # Try DhanHQ API first
-            api_result = self.try_dhanhq_api(symbol, expiry_index)
+            security_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 29}
+            security_id = security_map.get(symbol, 13)
             
-            if api_result:
-                parsed_data, expiries, selected_expiry, underlying_price = api_result
-                data_source = "DhanHQ Live API"
-                print(f"✅ Using live data")
-            else:
-                # Fallback to demo
-                print(f"⚠️ API unavailable, using demo data")
-                parsed_data, expiries, selected_expiry, underlying_price = self.generate_realistic_demo_data(symbol)
-                data_source = "Demo Data (Market Closed)"
+            # Fetch data for multiple strikes
+            parsed_data, underlying_price = self.fetch_multiple_strikes(security_id, strikes_range)
+            
+            if not parsed_data or not underlying_price:
+                raise Exception("No data from Rolling Options API. Market may be closed or Data APIs not enabled.")
+            
+            print(f"✅ Got {len(parsed_data)} strikes")
             
             # Create DataFrame
             df = pd.DataFrame(parsed_data)
             
-            # Filter strikes
-            df = df[
-                (df['Strike'] >= underlying_price - strikes_range * 100) &
-                (df['Strike'] <= underlying_price + strikes_range * 100)
-            ].copy()
+            # Remove duplicates
+            df = df.drop_duplicates(subset=['Strike']).sort_values('Strike').reset_index(drop=True)
             
-            if len(df) == 0:
-                raise Exception("No strikes in range")
+            print(f"💰 Underlying: ₹{underlying_price:,.2f}")
             
-            print(f"💰 Price: ₹{underlying_price:,.0f} | Strikes: {len(df)}")
-            
-            # Time to expiry
-            try:
-                expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
-            except:
-                expiry_date = datetime.now() + timedelta(days=7)
-            
-            days_to_expiry = max((expiry_date - datetime.now()).days, 1)
+            # Calculate time to expiry (assume weekly expiry - next Thursday)
+            today = datetime.now()
+            days_ahead = (3 - today.weekday()) % 7
+            if days_ahead == 0:
+                days_ahead = 7
+            expiry_date = today + timedelta(days=days_ahead)
+            days_to_expiry = max((expiry_date - today).days, 1)
             T = days_to_expiry / 365.0
             
             # Calculate Greeks
@@ -246,7 +184,7 @@ class EnhancedGEXDEXCalculator:
             df['Call_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'), axis=1)
             df['Put_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01), 'put'), axis=1)
             
-            # GEX/DEX
+            # GEX/DEX calculations
             df['Call_GEX'] = df['Call_Gamma'] * df['Call_OI'] * underlying_price * underlying_price * 0.01
             df['Put_GEX'] = df['Put_Gamma'] * df['Put_OI'] * underlying_price * underlying_price * 0.01 * -1
             df['Net_GEX'] = df['Call_GEX'] + df['Put_GEX']
@@ -270,12 +208,14 @@ class EnhancedGEXDEXCalculator:
                 'atm_straddle_premium': atm_row['Call_LTP'] + atm_row['Put_LTP']
             }
             
-            print(f"✅ Complete!")
+            print(f"✅ Calculation complete!")
             
-            return df, underlying_price, data_source, atm_info
+            return df, underlying_price, "DhanHQ Rolling Options API", atm_info
             
         except Exception as e:
-            raise Exception(f"Calculation error: {str(e)}")
+            error_msg = str(e)
+            print(f"❌ Error: {error_msg}")
+            raise Exception(error_msg)
 
 def calculate_dual_gex_dex_flow(df, futures_ltp):
     try:
