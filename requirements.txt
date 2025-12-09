@@ -4,4 +4,4 @@ numpy
 plotly
 scipy
 pytz
-dhanhq
+requests
