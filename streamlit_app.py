@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import pytz
+import os
 
 # Import calculator
 try:
@@ -52,8 +53,6 @@ def check_password():
             **Demo Credentials:**
             - Free Tier: `demo` / `demo123`
             - Premium: `premium` / `premium123`
-            
-            **Subscribe to NYZTrade YouTube for updates!**
             """)
         return False
     
@@ -111,12 +110,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 1rem;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 8px;
-        color: white;
-    }
     .success-box {
         background-color: #d4edda;
         border-left: 5px solid #28a745;
@@ -152,43 +145,50 @@ if st.sidebar.button("🚪 Logout"):
     st.rerun()
 
 # ============================================================================
-# DHAN CREDENTIALS
+# DHAN CREDENTIALS - BULLETPROOF VERSION
 # ============================================================================
 
+DHAN_CLIENT_ID = None
+DHAN_ACCESS_TOKEN = None
+
+# Method 1: Try from secrets
 try:
     DHAN_CLIENT_ID = st.secrets["dhan_client_id"]
     DHAN_ACCESS_TOKEN = st.secrets["dhan_access_token"]
+    st.sidebar.info("📍 Loaded from Secrets")
+except:
+    pass
+
+# Method 2: Try from environment variables
+if not DHAN_CLIENT_ID:
+    try:
+        DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID")
+        DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN")
+        if DHAN_CLIENT_ID:
+            st.sidebar.info("📍 Loaded from Environment")
+    except:
+        pass
+
+# Method 3: Hardcoded (WORKING CREDENTIALS)
+if not DHAN_CLIENT_ID:
+    DHAN_CLIENT_ID = "022705a2"
+    DHAN_ACCESS_TOKEN = "a9e88db4-17ae-4e2e-ba26-211ba1b62ccd"
+    st.sidebar.info("📍 Using Hardcoded Credentials")
+
+# Display status
+if DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN:
     st.sidebar.success(f"✅ DhanHQ Connected")
     st.sidebar.caption(f"Client: {DHAN_CLIENT_ID[:4]}***")
-except:
-    DHAN_CLIENT_ID = None
-    DHAN_ACCESS_TOKEN = None
-    st.sidebar.error("❌ DhanHQ Not Connected")
-    st.error("""
-    ### ⚠️ DhanHQ API Credentials Required
-    
-    Please configure your DhanHQ API credentials:
-    
-    1. Go to: **☰ Menu → Manage app → Settings → Secrets**
-    2. Add your credentials:
-```toml
-    [passwords]
-    demo = "demo123"
-    premium = "premium123"
-    premium_users = ["premium", "niyas"]
-    
-    dhan_client_id = "YOUR_CLIENT_ID"
-    dhan_access_token = "YOUR_API_SECRET"
-```
-    
-    3. Get credentials from: https://www.dhan.co/ → API Management
-    """)
+else:
+    st.sidebar.error("❌ DhanHQ credentials missing")
+    st.error("### ⚠️ Configuration Error - No credentials available")
     st.stop()
 
 # ============================================================================
 # SIDEBAR CONTROLS
 # ============================================================================
 
+st.sidebar.markdown("---")
 st.sidebar.header("⚙️ Dashboard Settings")
 
 symbol = st.sidebar.selectbox(
@@ -262,12 +262,18 @@ with st.spinner(f"🔄 Fetching live {symbol} data from DhanHQ..."):
 
 if error:
     st.error(f"❌ Error: {error}")
-    st.info("""
-    **Common Issues:**
-    - Market is closed (Try during 9:15 AM - 3:30 PM IST)
-    - Invalid DhanHQ credentials
-    - API rate limit reached
-    """)
+    
+    with st.expander("🔧 Troubleshooting"):
+        st.markdown("""
+        **Common Issues:**
+        
+        1. **Market Hours**: Try during 9:15 AM - 3:30 PM IST
+        2. **API Limits**: DhanHQ has rate limits
+        3. **Data APIs**: Ensure Data APIs are enabled in Dhan account
+        4. **New API Key**: Try regenerating API key from Dhan portal
+        
+        **Market Status**: Check if NSE is open
+        """)
     st.stop()
 
 if df is None or len(df) == 0:
@@ -285,18 +291,14 @@ col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     total_gex = float(df['Net_GEX_B'].sum())
     delta_text = "🟢 Bullish" if total_gex > 0 else "🔴 Volatile"
-    st.metric(
-        "Total Net GEX",
-        f"{total_gex:.4f}B",
-        delta=delta_text
-    )
+    st.metric("Total Net GEX", f"{total_gex:.4f}B", delta=delta_text)
 
 with col2:
-    call_gex = float(df['Call_GEX'].sum())
+    call_gex = float(df['Call_GEX'].sum() / 1e9)
     st.metric("Call GEX", f"{call_gex:.4f}B")
 
 with col3:
-    put_gex = float(df['Put_GEX'].sum())
+    put_gex = float(df['Put_GEX'].sum() / 1e9)
     st.metric("Put GEX", f"{put_gex:.4f}B")
 
 with col4:
@@ -333,7 +335,6 @@ try:
         
 except Exception as e:
     flow_metrics = None
-    st.warning(f"Flow metrics unavailable: {e}")
 
 # ============================================================================
 # GAMMA FLIP ZONES
@@ -361,10 +362,9 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 # TAB 1: GEX Profile
 with tab1:
-    st.subheader(f"NYZTrade - {symbol} Gamma Exposure Profile")
+    st.subheader(f"{symbol} Gamma Exposure Profile")
     
     fig = go.Figure()
-    
     colors = ['green' if x > 0 else 'red' for x in df['Net_GEX_B']]
     
     fig.add_trace(go.Bar(
@@ -373,58 +373,31 @@ with tab1:
         orientation='h',
         marker_color=colors,
         name='Net GEX',
-        hovertemplate='<b>Strike:</b> %{y}<br><b>Net GEX:</b> %{x:.4f}B<extra></extra>'
+        hovertemplate='<b>Strike:</b> %{y}<br><b>GEX:</b> %{x:.4f}B<extra></extra>'
     ))
-    
-    # Add gamma flip zones
-    if gamma_flip_zones:
-        max_gex = df['Net_GEX_B'].abs().max()
-        for zone in gamma_flip_zones:
-            fig.add_shape(
-                type="rect",
-                y0=zone['lower_strike'],
-                y1=zone['upper_strike'],
-                x0=-max_gex * 1.5,
-                x1=max_gex * 1.5,
-                fillcolor="yellow",
-                opacity=0.2,
-                layer="below",
-                line_width=0
-            )
     
     fig.add_hline(
         y=futures_ltp,
         line_dash="dash",
         line_color="blue",
         line_width=3,
-        annotation_text=f"Futures: ₹{futures_ltp:,.2f}",
-        annotation_position="right"
+        annotation_text=f"Current: ₹{futures_ltp:,.0f}"
     )
     
     fig.update_layout(
         height=600,
         xaxis_title="Net GEX (Billions)",
         yaxis_title="Strike Price",
-        template='plotly_white',
-        hovermode='closest'
+        template='plotly_white'
     )
     
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Interpretation
-    if total_gex > 0.5:
-        st.success("🟢 **Strong Positive GEX**: Market likely to remain sideways to bullish. Consider premium selling strategies.")
-    elif total_gex < -0.5:
-        st.error("🔴 **Negative GEX**: High volatility expected. Consider buying volatility strategies.")
-    else:
-        st.warning("⚖️ **Neutral GEX**: Mixed signals. Follow DEX for direction.")
 
 # TAB 2: DEX Profile
 with tab2:
-    st.subheader(f"NYZTrade - {symbol} Delta Exposure Profile")
+    st.subheader(f"{symbol} Delta Exposure Profile")
     
     fig2 = go.Figure()
-    
     dex_colors = ['green' if x > 0 else 'red' for x in df['Net_DEX_B']]
     
     fig2.add_trace(go.Bar(
@@ -433,16 +406,10 @@ with tab2:
         orientation='h',
         marker_color=dex_colors,
         name='Net DEX',
-        hovertemplate='<b>Strike:</b> %{y}<br><b>Net DEX:</b> %{x:.4f}B<extra></extra>'
+        hovertemplate='<b>Strike:</b> %{y}<br><b>DEX:</b> %{x:.4f}B<extra></extra>'
     ))
     
-    fig2.add_hline(
-        y=futures_ltp,
-        line_dash="dash",
-        line_color="blue",
-        line_width=3,
-        annotation_text=f"Futures: ₹{futures_ltp:,.2f}"
-    )
+    fig2.add_hline(y=futures_ltp, line_dash="dash", line_color="blue", line_width=3)
     
     fig2.update_layout(
         height=600,
@@ -458,120 +425,43 @@ with tab3:
     st.subheader("Strike-wise Analysis")
     
     display_cols = ['Strike', 'Call_OI', 'Put_OI', 'Net_GEX_B', 'Net_DEX_B', 'Total_Volume']
-    display_df = df[display_cols].copy()
+    st.dataframe(df[display_cols], use_container_width=True, height=400)
     
-    # Format numbers
-    for col in ['Call_OI', 'Put_OI', 'Total_Volume']:
-        if col in display_df.columns:
-            display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}")
-    
-    st.dataframe(display_df, use_container_width=True, height=400)
-    
-    # Download button
     csv = df.to_csv(index=False)
     ist_time = get_ist_time()
     st.download_button(
-        label="📥 Download Complete Data (CSV)",
+        label="📥 Download CSV",
         data=csv,
-        file_name=f"NYZTrade_{symbol}_GEX_{ist_time.strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv",
-        use_container_width=True
+        file_name=f"NYZTrade_{symbol}_{ist_time.strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv"
     )
 
-# TAB 4: Trading Strategies
+# TAB 4: Strategies
 with tab4:
-    st.subheader("💡 Recommended Trading Strategies")
+    st.subheader("💡 Trading Strategies")
     
     if flow_metrics and atm_info:
         gex_val = flow_metrics['gex_near_total']
-        dex_val = flow_metrics['dex_near_total']
         
-        st.markdown("### 📊 Current Market Setup")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("GEX Flow", f"{gex_val:.2f}")
-            st.metric("DEX Flow", f"{dex_val:.2f}")
-        with col2:
-            st.metric("ATM Strike", f"{atm_info['atm_strike']}")
-            st.metric("Straddle Premium", f"₹{atm_info['atm_straddle_premium']:.2f}")
-        
-        st.markdown("---")
-        
-        # Strategy recommendations based on GEX/DEX
         if gex_val > 50:
-            st.success("### 🟢 Strong Positive GEX - Sideways/Bullish Market")
+            st.success("### 🟢 Iron Condor Strategy")
             st.markdown(f"""
-            **Recommended Strategy: Iron Condor**
+            **Setup:**
+            - Sell {symbol} {int(futures_ltp)} CE + PE
+            - Buy {symbol} {int(futures_ltp + 200)} CE + {int(futures_ltp - 200)} PE
             
-            Setup:
-            - Sell {symbol} {int(futures_ltp)} CE
-            - Buy {symbol} {int(futures_ltp + 200)} CE
-            - Sell {symbol} {int(futures_ltp)} PE  
-            - Buy {symbol} {int(futures_ltp - 200)} PE
-            
-            **Risk Level:** Moderate  
-            **Max Profit:** Premium collected  
-            **Best Range:** ₹{int(futures_ltp - 100):,} to ₹{int(futures_ltp + 100):,}
+            **Risk:** Moderate | **Best Range:** ±₹100
             """)
-        
         elif gex_val < -50:
-            st.error("### 🔴 Negative GEX - High Volatility Expected")
+            st.error("### 🔴 Long Straddle Strategy")
             st.markdown(f"""
-            **Recommended Strategy: Long Straddle**
+            **Setup:**
+            - Buy {symbol} {atm_info['atm_strike']} CE + PE
             
-            Setup:
-            - Buy {symbol} {atm_info['atm_strike']} CE
-            - Buy {symbol} {atm_info['atm_strike']} PE
-            
-            **Cost:** ₹{atm_info['atm_straddle_premium']:.2f}  
-            **Breakeven:** ₹{atm_info['atm_strike'] - atm_info['atm_straddle_premium']:.0f} / ₹{atm_info['atm_strike'] + atm_info['atm_straddle_premium']:.0f}  
-            **Risk Level:** High (needs big move)
+            **Cost:** ₹{atm_info['atm_straddle_premium']:.2f} | **Risk:** High
             """)
-        
         else:
-            st.warning("### ⚖️ Neutral GEX - Follow DEX Direction")
-            if dex_val > 20:
-                st.markdown(f"""
-                **Recommended Strategy: Bull Call Spread**
-                
-                Setup:
-                - Buy {symbol} {int(futures_ltp)} CE
-                - Sell {symbol} {int(futures_ltp + 100)} CE
-                
-                **Risk Level:** Moderate  
-                **Direction:** Bullish
-                """)
-            elif dex_val < -20:
-                st.markdown(f"""
-                **Recommended Strategy: Bear Put Spread**
-                
-                Setup:
-                - Buy {symbol} {int(futures_ltp)} PE
-                - Sell {symbol} {int(futures_ltp - 100)} PE
-                
-                **Risk Level:** Moderate  
-                **Direction:** Bearish
-                """)
-            else:
-                st.info("**Wait for Clarity** - Mixed signals, stay cautious")
-        
-        # Risk management
-        st.markdown("---")
-        st.markdown("### ⚠️ Risk Management Rules")
-        st.markdown("""
-        1. **Position Sizing**: Never risk more than 2% of capital per trade
-        2. **Stop Loss**: Always use defined risk strategies
-        3. **Time Decay**: Monitor theta closely for long options
-        4. **Exit Rules**: Take profit at 50-70% of max profit for spreads
-        5. **Gamma Flip Zones**: Avoid tight stops near these high-volatility areas
-        """)
-        
-        if user_tier != "premium":
-            st.info("🔒 **Premium Feature:** Backtested strategy parameters and win rates coming soon!")
-    
-    else:
-        st.warning("Flow metrics unavailable for strategy generation")
+            st.warning("### ⚖️ Wait for Clarity")
 
 # ============================================================================
 # FOOTER
@@ -580,22 +470,15 @@ with tab4:
 st.markdown("---")
 
 col1, col2, col3, col4 = st.columns(4)
-
 ist_time = get_ist_time()
 
 with col1:
     st.info(f"⏰ {ist_time.strftime('%H:%M:%S')} IST")
-
 with col2:
     st.info(f"📅 {ist_time.strftime('%d %b %Y')}")
-
 with col3:
     st.info(f"📊 {symbol}")
-
 with col4:
-    if gamma_flip_zones:
-        st.warning(f"⚡ {len(gamma_flip_zones)} Flip Zone(s)")
-    else:
-        st.success("✅ No Flip Zones")
+    st.success(f"✅ {fetch_method}")
 
-st.markdown(f"**💡 NYZTrade YouTube | Data: {fetch_method} | Powered by DhanHQ v2.1.0**")
+st.markdown(f"**💡 NYZTrade YouTube | Powered by DhanHQ v2.1.0**")
