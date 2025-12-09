@@ -2,15 +2,8 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 from datetime import datetime, timedelta
+import requests
 import traceback
-
-# Import DhanHQ
-try:
-    from dhanhq import DhanContext, dhanhq
-    DHAN_NEW = True
-except ImportError:
-    from dhanhq import dhanhq
-    DHAN_NEW = False
 
 class BlackScholesCalculator:
     @staticmethod
@@ -33,170 +26,175 @@ class BlackScholesCalculator:
         return delta
 
 class EnhancedGEXDEXCalculator:
-    """GEX/DEX Calculator with comprehensive error handling"""
+    """GEX/DEX Calculator using DhanHQ REST API (Official v2)"""
     
     def __init__(self, client_id=None, access_token=None, risk_free_rate=0.07):
         self.risk_free_rate = risk_free_rate
         self.bs_calc = BlackScholesCalculator()
         self.client_id = client_id
         self.access_token = access_token
-        self.dhan = None
+        self.base_url = "https://api.dhan.co/v2"
         
         if client_id and access_token:
-            try:
-                if DHAN_NEW:
-                    dhan_context = DhanContext(client_id, access_token)
-                    self.dhan = dhanhq(dhan_context)
-                else:
-                    self.dhan = dhanhq(client_id, access_token)
-                print(f"✅ DhanHQ initialized successfully")
-            except Exception as e:
-                print(f"⚠️ DhanHQ init error: {str(e)}")
-                print(f"Full traceback: {traceback.format_exc()}")
+            print(f"✅ DhanHQ REST API configured | Client: {client_id}")
     
-    def generate_demo_data(self, symbol="NIFTY", underlying_price=None):
-        """Generate realistic demo data"""
+    def get_expiry_list(self, security_id, exchange_segment="IDX_I"):
+        """Get expiry list using DhanHQ REST API"""
+        
+        url = f"{self.base_url}/optionchain/expirylist"
+        
+        headers = {
+            "access-token": self.access_token,
+            "client-id": self.client_id,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "UnderlyingScrip": security_id,
+            "UnderlyingSeg": exchange_segment
+        }
+        
         try:
-            if underlying_price is None:
-                defaults = {"NIFTY": 24500, "BANKNIFTY": 52000, "FINNIFTY": 22500, "MIDCPNIFTY": 12000}
-                underlying_price = defaults.get(symbol, 24500)
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
             
-            print(f"📊 Generating demo data for {symbol}")
-            
-            strikes = []
-            for i in range(-15, 16):
-                strike = int((underlying_price + i * 100) / 100) * 100
-                strikes.append(strike)
-            
-            option_data = []
-            
-            for strike in strikes:
-                distance = abs(strike - underlying_price)
-                atm_factor = np.exp(-distance / 500)
+            if data.get('status') == 'success' and 'data' in data:
+                expiries = data['data']
+                print(f"✅ Got {len(expiries)} expiries from DhanHQ")
+                return expiries
+            else:
+                raise Exception(f"API returned: {data}")
                 
-                call_oi = int(np.random.uniform(50000, 500000) * atm_factor)
-                put_oi = int(np.random.uniform(50000, 500000) * atm_factor)
-                
-                base_iv = 15 + (distance / 100)
-                call_iv = base_iv + np.random.uniform(-2, 2)
-                put_iv = base_iv + np.random.uniform(-2, 2)
-                
-                if strike > underlying_price:
-                    call_ltp = max(0.5, (strike - underlying_price) * 0.3 + np.random.uniform(5, 50))
-                    put_ltp = max(0.5, np.random.uniform(1, 10))
-                else:
-                    call_ltp = max(0.5, np.random.uniform(1, 10))
-                    put_ltp = max(0.5, (underlying_price - strike) * 0.3 + np.random.uniform(5, 50))
-                
-                call_volume = int(np.random.uniform(1000, 50000) * atm_factor)
-                put_volume = int(np.random.uniform(1000, 50000) * atm_factor)
-                
-                option_data.append({
-                    'strike_price': strike,
-                    'option_type': 'CALL',
-                    'oi': call_oi,
-                    'iv': call_iv,
-                    'ltp': call_ltp,
-                    'volume': call_volume
-                })
-                
-                option_data.append({
-                    'strike_price': strike,
-                    'option_type': 'PUT',
-                    'oi': put_oi,
-                    'iv': put_iv,
-                    'ltp': put_ltp,
-                    'volume': put_volume
-                })
-            
-            today = datetime.now()
-            days_ahead = (3 - today.weekday()) % 7
-            if days_ahead == 0:
-                days_ahead = 7
-            next_thursday = today + timedelta(days=days_ahead)
-            expiry = next_thursday.strftime('%Y-%m-%d')
-            
-            print(f"✅ Generated {len(option_data)} demo contracts")
-            return option_data, [expiry], expiry
-            
         except Exception as e:
-            print(f"❌ Demo data generation error: {str(e)}")
-            print(f"Full traceback: {traceback.format_exc()}")
+            print(f"⚠️ Expiry list error: {str(e)}")
+            raise
+    
+    def get_option_chain(self, security_id, exchange_segment, expiry):
+        """Get option chain using DhanHQ REST API"""
+        
+        url = f"{self.base_url}/optionchain"
+        
+        headers = {
+            "access-token": self.access_token,
+            "client-id": self.client_id,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "UnderlyingScrip": security_id,
+            "UnderlyingSeg": exchange_segment,
+            "Expiry": expiry
+        }
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'data' in data:
+                print(f"✅ Got option chain from DhanHQ")
+                return data['data']
+            else:
+                raise Exception(f"API returned: {data}")
+                
+        except Exception as e:
+            print(f"⚠️ Option chain error: {str(e)}")
             raise
     
     def get_underlying_price(self, symbol="NIFTY"):
-        """Get index price"""
+        """Get index price - use defaults for now"""
         defaults = {"NIFTY": 24500, "BANKNIFTY": 52000, "FINNIFTY": 22500, "MIDCPNIFTY": 12000}
         return defaults.get(symbol, 24500)
     
-    def parse_option_data(self, option_data, underlying_price):
-        """Parse option data with error handling"""
-        try:
-            strikes_dict = {}
-            
-            for opt in option_data:
-                try:
-                    strike = float(opt.get('strike_price', opt.get('strikePrice', 0)))
-                    if strike == 0:
-                        continue
-                    
-                    if strike not in strikes_dict:
-                        strikes_dict[strike] = {
-                            'Strike': strike,
-                            'Call_OI': 0, 'Call_IV': 0.15, 'Call_LTP': 0, 'Call_Volume': 0,
-                            'Put_OI': 0, 'Put_IV': 0.15, 'Put_LTP': 0, 'Put_Volume': 0
-                        }
-                    
-                    opt_type = str(opt.get('option_type', opt.get('optionType', ''))).upper()
-                    
-                    if 'CALL' in opt_type or opt_type == 'CE':
-                        strikes_dict[strike]['Call_OI'] = int(opt.get('oi', opt.get('open_interest', 0)))
-                        iv = opt.get('iv', opt.get('implied_volatility', 15))
-                        strikes_dict[strike]['Call_IV'] = float(iv) / 100 if iv and iv > 0 else 0.15
-                        strikes_dict[strike]['Call_LTP'] = float(opt.get('ltp', opt.get('last_price', 0)))
-                        strikes_dict[strike]['Call_Volume'] = int(opt.get('volume', 0))
-                    
-                    elif 'PUT' in opt_type or opt_type == 'PE':
-                        strikes_dict[strike]['Put_OI'] = int(opt.get('oi', opt.get('open_interest', 0)))
-                        iv = opt.get('iv', opt.get('implied_volatility', 15))
-                        strikes_dict[strike]['Put_IV'] = float(iv) / 100 if iv and iv > 0 else 0.15
-                        strikes_dict[strike]['Put_LTP'] = float(opt.get('ltp', opt.get('last_price', 0)))
-                        strikes_dict[strike]['Put_Volume'] = int(opt.get('volume', 0))
-                except Exception as opt_error:
-                    continue
-            
-            parsed = list(strikes_dict.values())
-            print(f"✅ Parsed {len(parsed)} strikes")
-            return parsed
-            
-        except Exception as e:
-            print(f"❌ Parse error: {str(e)}")
-            print(f"Full traceback: {traceback.format_exc()}")
-            raise
+    def parse_option_chain_response(self, option_chain_data):
+        """Parse DhanHQ option chain response format"""
+        
+        parsed_data = []
+        
+        # Get underlying LTP
+        underlying_ltp = option_chain_data.get('last_price', 24500)
+        
+        # Get option chain dictionary
+        oc = option_chain_data.get('oc', {})
+        
+        for strike_str, strike_data in oc.items():
+            try:
+                strike = float(strike_str)
+                
+                # Parse CE (Call) data
+                ce_data = strike_data.get('ce', {})
+                call_oi = ce_data.get('oi', 0)
+                call_iv = ce_data.get('implied_volatility', 15)
+                call_ltp = ce_data.get('last_price', 0)
+                call_volume = ce_data.get('volume', 0)
+                
+                # Parse PE (Put) data
+                pe_data = strike_data.get('pe', {})
+                put_oi = pe_data.get('oi', 0)
+                put_iv = pe_data.get('implied_volatility', 15)
+                put_ltp = pe_data.get('last_price', 0)
+                put_volume = pe_data.get('volume', 0)
+                
+                parsed_data.append({
+                    'Strike': strike,
+                    'Call_OI': int(call_oi),
+                    'Call_IV': float(call_iv) / 100 if call_iv > 1 else float(call_iv),
+                    'Call_LTP': float(call_ltp),
+                    'Call_Volume': int(call_volume),
+                    'Put_OI': int(put_oi),
+                    'Put_IV': float(put_iv) / 100 if put_iv > 1 else float(put_iv),
+                    'Put_LTP': float(put_ltp),
+                    'Put_Volume': int(put_volume)
+                })
+                
+            except Exception as e:
+                continue
+        
+        print(f"✅ Parsed {len(parsed_data)} strikes")
+        return parsed_data, underlying_ltp
     
     def fetch_and_calculate_gex_dex(self, symbol="NIFTY", strikes_range=12, expiry_index=0):
-        """Main calculation with full error handling"""
+        """Main calculation using DhanHQ REST API"""
         
         try:
-            print(f"🔄 Starting fetch for {symbol}...")
+            print(f"🔄 Fetching {symbol} from DhanHQ REST API...")
             
-            # Get price
-            underlying_price = self.get_underlying_price(symbol)
-            print(f"💰 Using price: ₹{underlying_price:,.0f}")
+            # Security ID mapping
+            security_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 29}
+            security_id = security_map.get(symbol, 13)
+            exchange_segment = "IDX_I"
             
-            # Get option data - always use demo for now
-            print(f"📊 Using demo data (bypassing API)")
-            option_data, expiries, selected_expiry = self.generate_demo_data(symbol, underlying_price)
+            # Step 1: Get expiry list
+            expiries = self.get_expiry_list(security_id, exchange_segment)
             
-            # Parse data
-            parsed_data = self.parse_option_data(option_data, underlying_price)
+            if not expiries:
+                raise Exception("No expiries available")
+            
+            # Select expiry
+            if expiry_index >= len(expiries):
+                expiry_index = 0
+            selected_expiry = expiries[expiry_index]
+            
+            print(f"📅 Selected expiry: {selected_expiry}")
+            
+            # Step 2: Get option chain
+            option_chain_data = self.get_option_chain(security_id, exchange_segment, selected_expiry)
+            
+            # Step 3: Parse option chain
+            parsed_data, underlying_price = self.parse_option_chain_response(option_chain_data)
             
             if not parsed_data:
                 raise Exception("No data after parsing")
             
             # Create DataFrame
             df = pd.DataFrame(parsed_data)
-            print(f"✅ DataFrame created: {len(df)} rows")
+            
+            # Use API underlying price if available, else use default
+            if underlying_price == 0:
+                underlying_price = self.get_underlying_price(symbol)
+            
+            print(f"💰 Underlying: ₹{underlying_price:,.2f}")
             
             # Filter strikes
             df = df[
@@ -207,37 +205,55 @@ class EnhancedGEXDEXCalculator:
             if len(df) == 0:
                 raise Exception("No strikes in range")
             
-            print(f"✅ Filtered to {len(df)} strikes")
+            print(f"✅ Processing {len(df)} strikes")
             
-            # Calculate expiry
+            # Calculate time to expiry
             try:
-                expiry_date = datetime.strptime(str(selected_expiry), '%Y-%m-%d')
+                expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
             except:
                 expiry_date = datetime.now() + timedelta(days=7)
             
             days_to_expiry = max((expiry_date - datetime.now()).days, 1)
             T = days_to_expiry / 365.0
-            print(f"📅 Days to expiry: {days_to_expiry}")
             
             # Calculate Greeks
-            print(f"🔢 Calculating Greeks...")
-            df['Call_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01)), axis=1)
-            df['Put_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01)), axis=1)
-            df['Call_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'), axis=1)
-            df['Put_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01), 'put'), axis=1)
+            df['Call_Gamma'] = df.apply(
+                lambda r: self.bs_calc.calculate_gamma(
+                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01)
+                ), axis=1
+            )
             
-            # Calculate GEX/DEX
-            print(f"📊 Calculating GEX/DEX...")
+            df['Put_Gamma'] = df.apply(
+                lambda r: self.bs_calc.calculate_gamma(
+                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01)
+                ), axis=1
+            )
+            
+            df['Call_Delta'] = df.apply(
+                lambda r: self.bs_calc.calculate_delta(
+                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'
+                ), axis=1
+            )
+            
+            df['Put_Delta'] = df.apply(
+                lambda r: self.bs_calc.calculate_delta(
+                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01), 'put'
+                ), axis=1
+            )
+            
+            # GEX calculations
             df['Call_GEX'] = df['Call_Gamma'] * df['Call_OI'] * underlying_price * underlying_price * 0.01
             df['Put_GEX'] = df['Put_Gamma'] * df['Put_OI'] * underlying_price * underlying_price * 0.01 * -1
             df['Net_GEX'] = df['Call_GEX'] + df['Put_GEX']
             df['Net_GEX_B'] = df['Net_GEX'] / 1e9
             
+            # DEX calculations
             df['Call_DEX'] = df['Call_Delta'] * df['Call_OI'] * underlying_price * 0.01
             df['Put_DEX'] = df['Put_Delta'] * df['Put_OI'] * underlying_price * 0.01
             df['Net_DEX'] = df['Call_DEX'] + df['Put_DEX']
             df['Net_DEX_B'] = df['Net_DEX'] / 1e9
             
+            # Hedging pressure
             total_gex = df['Net_GEX'].abs().sum()
             df['Hedging_Pressure'] = (df['Net_GEX'] / total_gex * 100) if total_gex > 0 else 0
             df['Total_Volume'] = df['Call_Volume'] + df['Put_Volume']
@@ -253,12 +269,12 @@ class EnhancedGEXDEXCalculator:
             
             print(f"✅ Calculation complete!")
             
-            return df, underlying_price, "Demo Data", atm_info
+            return df, underlying_price, "DhanHQ REST API v2", atm_info
             
         except Exception as e:
-            error_msg = f"Calculation error: {str(e)}"
+            error_msg = f"Error: {str(e)}"
             print(f"❌ {error_msg}")
-            print(f"Full traceback: {traceback.format_exc()}")
+            print(f"Traceback: {traceback.format_exc()}")
             raise Exception(error_msg)
 
 def calculate_dual_gex_dex_flow(df, futures_ltp):
@@ -292,8 +308,7 @@ def calculate_dual_gex_dex_flow(df, futures_ltp):
             'dex_near_bias': dex_bias,
             'combined_bias': f"{gex_bias} + {dex_bias}"
         }
-    except Exception as e:
-        print(f"❌ Flow calculation error: {str(e)}")
+    except:
         return None
 
 def detect_gamma_flip_zones(df):
@@ -313,6 +328,5 @@ def detect_gamma_flip_zones(df):
                 })
         
         return flip_zones
-    except Exception as e:
-        print(f"❌ Gamma flip detection error: {str(e)}")
+    except:
         return []
