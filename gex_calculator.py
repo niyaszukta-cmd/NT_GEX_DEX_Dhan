@@ -26,25 +26,29 @@ class BlackScholesCalculator:
         return delta
 
 class EnhancedGEXDEXCalculator:
-    """GEX/DEX Calculator using DhanHQ REST API v2"""
+    """GEX/DEX Calculator - Uses DhanHQ API Key + Secret"""
     
     def __init__(self, client_id=None, access_token=None, risk_free_rate=0.07):
         self.risk_free_rate = risk_free_rate
         self.bs_calc = BlackScholesCalculator()
         self.client_id = str(client_id).strip() if client_id else None
-        self.access_token = str(access_token).strip() if access_token else None
+        
+        # access_token is actually the API Secret in our setup
+        self.api_secret = str(access_token).strip() if access_token else None
+        
         self.base_url = "https://api.dhan.co/v2"
         
-        if self.client_id and self.access_token:
-            print(f"✅ DhanHQ configured | Client: {self.client_id} | Token: {len(self.access_token)} chars")
+        if self.client_id and self.api_secret:
+            print(f"✅ DhanHQ configured | Client: {self.client_id}")
     
     def get_expiry_list(self, security_id, exchange_segment="IDX_I"):
         """Get expiry list"""
         
         url = f"{self.base_url}/optionchain/expirylist"
         
+        # Use API Secret as access-token directly
         headers = {
-            "access-token": self.access_token,
+            "access-token": self.api_secret,
             "client-id": self.client_id,
             "Content-Type": "application/json"
         }
@@ -55,21 +59,35 @@ class EnhancedGEXDEXCalculator:
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            print(f"📡 Calling DhanHQ API...")
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            
+            print(f"📊 Response Status: {response.status_code}")
             
             if response.status_code == 401:
-                raise Exception("⚠️ DhanHQ Access Token expired or invalid. Please regenerate at https://www.dhan.co/ → API Management")
+                raise Exception("⚠️ DhanHQ authentication failed. Please verify your API credentials at https://www.dhan.co/ → API Management")
+            
+            if response.status_code == 429:
+                raise Exception("⚠️ Rate limit exceeded. DhanHQ allows 1 request per 3 seconds for Option Chain APIs")
             
             response.raise_for_status()
             data = response.json()
             
+            print(f"✅ Response: {data.get('status', 'unknown')}")
+            
             if data.get('status') == 'success' and 'data' in data:
-                return data['data']
+                expiries = data['data']
+                print(f"✅ Got {len(expiries)} expiries")
+                return expiries
             else:
-                raise Exception(f"API returned: {data}")
+                raise Exception(f"Unexpected API response: {data}")
                 
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Network error: {str(e)}")
+            raise Exception(f"Network error calling DhanHQ: {str(e)}")
         except Exception as e:
-            raise Exception(f"Expiry list error: {str(e)}")
+            print(f"❌ Error: {str(e)}")
+            raise
     
     def get_option_chain(self, security_id, exchange_segment, expiry):
         """Get option chain"""
@@ -77,7 +95,7 @@ class EnhancedGEXDEXCalculator:
         url = f"{self.base_url}/optionchain"
         
         headers = {
-            "access-token": self.access_token,
+            "access-token": self.api_secret,
             "client-id": self.client_id,
             "Content-Type": "application/json"
         }
@@ -89,24 +107,29 @@ class EnhancedGEXDEXCalculator:
         }
         
         try:
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            print(f"📡 Getting option chain for expiry: {expiry}")
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             if response.status_code == 401:
-                raise Exception("⚠️ DhanHQ Access Token expired or invalid")
+                raise Exception("⚠️ Authentication failed")
+            
+            if response.status_code == 429:
+                raise Exception("⚠️ Rate limit exceeded")
             
             response.raise_for_status()
             data = response.json()
             
             if 'data' in data:
+                print(f"✅ Got option chain data")
                 return data['data']
             else:
-                raise Exception(f"API returned: {data}")
+                raise Exception(f"No data in response: {data}")
                 
         except Exception as e:
             raise Exception(f"Option chain error: {str(e)}")
     
     def get_underlying_price(self, symbol="NIFTY"):
-        """Get index price"""
+        """Get index price - use defaults"""
         defaults = {"NIFTY": 24500, "BANKNIFTY": 52000, "FINNIFTY": 22500, "MIDCPNIFTY": 12000}
         return defaults.get(symbol, 24500)
     
@@ -114,7 +137,7 @@ class EnhancedGEXDEXCalculator:
         """Parse option chain"""
         
         parsed_data = []
-        underlying_ltp = option_chain_data.get('last_price', 24500)
+        underlying_ltp = option_chain_data.get('last_price', 0)
         oc = option_chain_data.get('oc', {})
         
         for strike_str, strike_data in oc.items():
@@ -138,13 +161,14 @@ class EnhancedGEXDEXCalculator:
             except:
                 continue
         
+        print(f"✅ Parsed {len(parsed_data)} strikes")
         return parsed_data, underlying_ltp
     
     def fetch_and_calculate_gex_dex(self, symbol="NIFTY", strikes_range=12, expiry_index=0):
         """Main calculation"""
         
         try:
-            print(f"🔄 Fetching {symbol}...")
+            print(f"🔄 Starting {symbol} analysis...")
             
             security_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 29}
             security_id = security_map.get(symbol, 13)
@@ -152,14 +176,14 @@ class EnhancedGEXDEXCalculator:
             # Get expiries
             expiries = self.get_expiry_list(security_id, "IDX_I")
             
-            if not expiries:
-                raise Exception("No expiries")
+            if not expiries or len(expiries) == 0:
+                raise Exception("No expiries available from DhanHQ API")
             
             if expiry_index >= len(expiries):
                 expiry_index = 0
             
             selected_expiry = expiries[expiry_index]
-            print(f"📅 Expiry: {selected_expiry}")
+            print(f"📅 Selected expiry: {selected_expiry}")
             
             # Get option chain
             option_chain_data = self.get_option_chain(security_id, "IDX_I", selected_expiry)
@@ -168,23 +192,26 @@ class EnhancedGEXDEXCalculator:
             parsed_data, underlying_price = self.parse_option_chain_response(option_chain_data)
             
             if not parsed_data:
-                raise Exception("No data")
+                raise Exception("No option data available")
             
             df = pd.DataFrame(parsed_data)
             
-            if underlying_price == 0:
+            # Use API price or default
+            if underlying_price == 0 or underlying_price is None:
                 underlying_price = self.get_underlying_price(symbol)
             
-            print(f"💰 Price: ₹{underlying_price:,.0f}")
+            print(f"💰 Underlying: ₹{underlying_price:,.2f}")
             
-            # Filter
+            # Filter strikes
             df = df[
                 (df['Strike'] >= underlying_price - strikes_range * 100) &
                 (df['Strike'] <= underlying_price + strikes_range * 100)
             ].copy()
             
             if len(df) == 0:
-                raise Exception("No strikes in range")
+                raise Exception("No strikes in selected range")
+            
+            print(f"📊 Processing {len(df)} strikes")
             
             # Time to expiry
             try:
@@ -195,7 +222,7 @@ class EnhancedGEXDEXCalculator:
             days_to_expiry = max((expiry_date - datetime.now()).days, 1)
             T = days_to_expiry / 365.0
             
-            # Greeks
+            # Calculate Greeks
             df['Call_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01)), axis=1)
             df['Put_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01)), axis=1)
             df['Call_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'), axis=1)
@@ -216,7 +243,7 @@ class EnhancedGEXDEXCalculator:
             df['Hedging_Pressure'] = (df['Net_GEX'] / total_gex * 100) if total_gex > 0 else 0
             df['Total_Volume'] = df['Call_Volume'] + df['Put_Volume']
             
-            # ATM
+            # ATM info
             atm_strike = df.iloc[(df['Strike'] - underlying_price).abs().argsort()[0]]['Strike']
             atm_row = df[df['Strike'] == atm_strike].iloc[0]
             
@@ -225,12 +252,14 @@ class EnhancedGEXDEXCalculator:
                 'atm_straddle_premium': atm_row['Call_LTP'] + atm_row['Put_LTP']
             }
             
-            print(f"✅ Complete!")
+            print(f"✅ Calculation complete!")
             
-            return df, underlying_price, "DhanHQ REST API v2", atm_info
+            return df, underlying_price, "DhanHQ API", atm_info
             
         except Exception as e:
-            raise Exception(str(e))
+            error_msg = str(e)
+            print(f"❌ Error: {error_msg}")
+            raise Exception(error_msg)
 
 def calculate_dual_gex_dex_flow(df, futures_ltp):
     try:
