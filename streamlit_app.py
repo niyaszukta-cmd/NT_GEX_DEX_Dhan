@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime
 import time
 import pytz
-import os
 
 # Import calculator
 try:
@@ -51,8 +50,9 @@ def check_password():
             st.markdown("---")
             st.info("""
             **Demo Credentials:**
-            - Free Tier: `demo` / `demo123`
+            - Free: `demo` / `demo123`
             - Premium: `premium` / `premium123`
+            - Admin: `niyas` / `nyztrade123`
             """)
         return False
     
@@ -145,43 +145,27 @@ if st.sidebar.button("🚪 Logout"):
     st.rerun()
 
 # ============================================================================
-# DHAN CREDENTIALS - BULLETPROOF VERSION
+# DHAN CREDENTIALS
 # ============================================================================
 
-DHAN_CLIENT_ID = None
-DHAN_ACCESS_TOKEN = None
-
-# Method 1: Try from secrets
 try:
     DHAN_CLIENT_ID = st.secrets["dhan_client_id"]
     DHAN_ACCESS_TOKEN = st.secrets["dhan_access_token"]
-    st.sidebar.info("📍 Loaded from Secrets")
-except:
-    pass
-
-# Method 2: Try from environment variables
-if not DHAN_CLIENT_ID:
-    try:
-        DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID")
-        DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN")
-        if DHAN_CLIENT_ID:
-            st.sidebar.info("📍 Loaded from Environment")
-    except:
-        pass
-
-# Method 3: Hardcoded (WORKING CREDENTIALS)
-if not DHAN_CLIENT_ID:
-    DHAN_CLIENT_ID = "022705a2"
-    DHAN_ACCESS_TOKEN = "a9e88db4-17ae-4e2e-ba26-211ba1b62ccd"
-    st.sidebar.info("📍 Using Hardcoded Credentials")
-
-# Display status
-if DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN:
     st.sidebar.success(f"✅ DhanHQ Connected")
-    st.sidebar.caption(f"Client: {DHAN_CLIENT_ID[:4]}***")
-else:
-    st.sidebar.error("❌ DhanHQ credentials missing")
-    st.error("### ⚠️ Configuration Error - No credentials available")
+    st.sidebar.caption(f"Client: {DHAN_CLIENT_ID}")
+except:
+    DHAN_CLIENT_ID = None
+    DHAN_ACCESS_TOKEN = None
+    st.sidebar.error("❌ DhanHQ Not Connected")
+    st.error("""
+    ### ⚠️ DhanHQ API Credentials Required
+    
+    Please configure your DhanHQ credentials in Streamlit Secrets:
+```toml
+    dhan_client_id = "YOUR_CLIENT_ID"
+    dhan_access_token = "YOUR_ACCESS_TOKEN"
+```
+    """)
     st.stop()
 
 # ============================================================================
@@ -267,12 +251,10 @@ if error:
         st.markdown("""
         **Common Issues:**
         
-        1. **Market Hours**: Try during 9:15 AM - 3:30 PM IST
-        2. **API Limits**: DhanHQ has rate limits
-        3. **Data APIs**: Ensure Data APIs are enabled in Dhan account
-        4. **New API Key**: Try regenerating API key from Dhan portal
-        
-        **Market Status**: Check if NSE is open
+        1. **Market Closed**: Try during 9:15 AM - 3:30 PM IST
+        2. **Token Expired**: Access tokens expire every 24 hours. Regenerate at https://www.dhan.co/
+        3. **Rate Limit**: DhanHQ allows 1 request per 3 seconds
+        4. **Data APIs**: Ensure Data APIs are enabled in your Dhan account
         """)
     st.stop()
 
@@ -315,24 +297,24 @@ with col5:
 try:
     flow_metrics = calculate_dual_gex_dex_flow(df, futures_ltp)
     
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        gex_bias = flow_metrics['gex_near_bias']
-        if "BULLISH" in gex_bias:
-            st.markdown(f'<div class="success-box"><b>GEX Bias:</b> {gex_bias}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="warning-box"><b>GEX Bias:</b> {gex_bias}</div>', unsafe_allow_html=True)
-    
-    with col2:
-        dex_bias = flow_metrics['dex_near_bias']
-        st.info(f"**DEX Bias:** {dex_bias}")
-    
-    with col3:
-        combined_bias = flow_metrics['combined_bias']
-        st.info(f"**Combined:** {combined_bias}")
+    if flow_metrics:
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
         
+        with col1:
+            gex_bias = flow_metrics['gex_near_bias']
+            if "BULLISH" in gex_bias:
+                st.markdown(f'<div class="success-box"><b>GEX Bias:</b> {gex_bias}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="warning-box"><b>GEX Bias:</b> {gex_bias}</div>', unsafe_allow_html=True)
+        
+        with col2:
+            dex_bias = flow_metrics['dex_near_bias']
+            st.info(f"**DEX Bias:** {dex_bias}")
+        
+        with col3:
+            combined_bias = flow_metrics['combined_bias']
+            st.info(f"**Combined:** {combined_bias}")
 except Exception as e:
     flow_metrics = None
 
@@ -392,6 +374,14 @@ with tab1:
     )
     
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Interpretation
+    if total_gex > 0.5:
+        st.success("🟢 **Strong Positive GEX**: Market likely sideways to bullish. Consider premium selling.")
+    elif total_gex < -0.5:
+        st.error("🔴 **Negative GEX**: High volatility expected. Consider volatility strategies.")
+    else:
+        st.warning("⚖️ **Neutral GEX**: Mixed signals. Follow DEX for direction.")
 
 # TAB 2: DEX Profile
 with tab2:
@@ -446,17 +436,14 @@ with tab4:
         if gex_val > 50:
             st.success("### 🟢 Iron Condor Strategy")
             st.markdown(f"""
-            **Setup:**
-            - Sell {symbol} {int(futures_ltp)} CE + PE
-            - Buy {symbol} {int(futures_ltp + 200)} CE + {int(futures_ltp - 200)} PE
+            **Setup:** Sell {symbol} {int(futures_ltp)} CE + PE, Buy {int(futures_ltp + 200)} CE + {int(futures_ltp - 200)} PE
             
             **Risk:** Moderate | **Best Range:** ±₹100
             """)
         elif gex_val < -50:
             st.error("### 🔴 Long Straddle Strategy")
             st.markdown(f"""
-            **Setup:**
-            - Buy {symbol} {atm_info['atm_strike']} CE + PE
+            **Setup:** Buy {symbol} {atm_info['atm_strike']} CE + PE
             
             **Cost:** ₹{atm_info['atm_straddle_premium']:.2f} | **Risk:** High
             """)
@@ -481,4 +468,4 @@ with col3:
 with col4:
     st.success(f"✅ {fetch_method}")
 
-st.markdown(f"**💡 NYZTrade YouTube | Powered by DhanHQ v2.1.0**")
+st.markdown(f"**💡 NYZTrade YouTube | Powered by DhanHQ**")
