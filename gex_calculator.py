@@ -25,32 +25,78 @@ class BlackScholesCalculator:
         return delta
 
 class EnhancedGEXDEXCalculator:
-    """GEX/DEX Calculator - DhanHQ Data API (No Access Token Required)"""
+    """GEX/DEX Calculator - DhanHQ with Token Generation"""
     
     def __init__(self, client_id=None, access_token=None, risk_free_rate=0.07):
         self.risk_free_rate = risk_free_rate
         self.bs_calc = BlackScholesCalculator()
         
-        # For Data APIs: client_id = API Key, access_token = API Secret
-        self.api_key = str(client_id).strip() if client_id else None
-        self.api_secret = str(access_token).strip() if access_token else None
+        # client_id = app_id, access_token = app_secret
+        self.app_id = str(client_id).strip() if client_id else None
+        self.app_secret = str(access_token).strip() if access_token else None
         
         self.base_url = "https://api.dhan.co/v2"
+        self.auth_url = "https://auth.dhan.co/app/consumeApp-consent"
+        self.jwt_token = None
         
-        if self.api_key and self.api_secret:
-            print(f"✅ DhanHQ Data API configured")
-            print(f"   API Key: {self.api_key}")
-            print(f"   API Secret: {self.api_secret[:10]}...{self.api_secret[-4:]}")
+        if self.app_id and self.app_secret:
+            print(f"✅ DhanHQ configured")
+            print(f"   App ID: {self.app_id}")
+            print(f"   App Secret: {self.app_secret[:10]}...")
+            
+            # Generate JWT token
+            self.generate_access_token()
+    
+    def generate_access_token(self):
+        """Generate JWT Access Token from app_id and app_secret"""
+        
+        try:
+            print(f"\n🔑 Generating Access Token...")
+            
+            headers = {
+                "app_id": self.app_id,
+                "app_secret": self.app_secret,
+                "Content-Type": "application/json"
+            }
+            
+            # Empty body for consent generation
+            payload = {}
+            
+            response = requests.post(self.auth_url, json=payload, headers=headers, timeout=10)
+            
+            print(f"📡 Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Extract access token from response
+                self.jwt_token = data.get('accessToken')
+                
+                if self.jwt_token:
+                    print(f"✅ Access Token generated successfully!")
+                    print(f"   Token: {self.jwt_token[:20]}...{self.jwt_token[-10:]}")
+                    return True
+                else:
+                    raise Exception(f"No accessToken in response: {data}")
+            else:
+                print(f"❌ Token generation failed")
+                print(f"   Response: {response.text}")
+                raise Exception(f"Failed to generate token: {response.status_code}")
+                
+        except Exception as e:
+            print(f"❌ Token generation error: {str(e)}")
+            raise Exception(f"Could not generate access token: {str(e)}")
     
     def get_expiry_list(self, security_id, exchange_segment="IDX_I"):
-        """Get expiry list - Data API method"""
+        """Get expiry list using generated JWT token"""
+        
+        if not self.jwt_token:
+            raise Exception("No JWT token available. Token generation failed.")
         
         url = f"{self.base_url}/optionchain/expirylist"
         
-        # Data API authentication - simpler than Trading API
         headers = {
-            "access-token": self.api_secret,  # API Secret goes here
-            "client-id": self.api_key,         # API Key goes here
+            "access-token": self.jwt_token,  # Use generated JWT token
             "Content-Type": "application/json"
         }
         
@@ -60,52 +106,45 @@ class EnhancedGEXDEXCalculator:
         }
         
         try:
-            print(f"📡 Calling DhanHQ Expiry List API...")
-            print(f"   URL: {url}")
-            print(f"   Payload: {payload}")
+            print(f"\n📡 Calling Expiry List API...")
             
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             print(f"📊 Status: {response.status_code}")
             
             if response.status_code == 401:
-                print(f"❌ Authentication failed")
-                print(f"   Response: {response.text[:200]}")
-                raise Exception("Authentication failed. Please verify API Key and API Secret at https://www.dhan.co/ → API Management")
+                print(f"⚠️ Token expired or invalid, regenerating...")
+                self.generate_access_token()
+                # Retry with new token
+                headers["access-token"] = self.jwt_token
+                response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             if response.status_code == 429:
-                raise Exception("Rate limit exceeded. Wait 3 seconds between requests.")
+                raise Exception("Rate limit exceeded. Wait 3 seconds.")
             
             response.raise_for_status()
             data = response.json()
             
-            print(f"✅ Response received")
-            
             if data.get('status') == 'success' and 'data' in data:
                 expiries = data['data']
-                print(f"✅ Got {len(expiries)} expiries: {expiries[:3]}...")
+                print(f"✅ Got {len(expiries)} expiries")
                 return expiries
-            elif data.get('status') == 'failure':
-                error_msg = data.get('remarks', 'Unknown error')
-                raise Exception(f"API returned failure: {error_msg}")
             else:
-                raise Exception(f"Unexpected response: {data}")
+                raise Exception(f"API error: {data}")
                 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Network error: {str(e)}")
-            raise Exception(f"Network error: {str(e)}")
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
-            raise
+            raise Exception(f"Expiry list error: {str(e)}")
     
     def get_option_chain(self, security_id, exchange_segment, expiry):
-        """Get option chain - Data API method"""
+        """Get option chain using JWT token"""
+        
+        if not self.jwt_token:
+            raise Exception("No JWT token available")
         
         url = f"{self.base_url}/optionchain"
         
         headers = {
-            "access-token": self.api_secret,
-            "client-id": self.api_key,
+            "access-token": self.jwt_token,
             "Content-Type": "application/json"
         }
         
@@ -116,18 +155,17 @@ class EnhancedGEXDEXCalculator:
         }
         
         try:
-            print(f"📡 Calling DhanHQ Option Chain API...")
-            print(f"   Expiry: {expiry}")
+            print(f"\n📡 Calling Option Chain API...")
             
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             print(f"📊 Status: {response.status_code}")
             
             if response.status_code == 401:
-                raise Exception("Authentication failed")
-            
-            if response.status_code == 429:
-                raise Exception("Rate limit exceeded")
+                print(f"⚠️ Token expired, regenerating...")
+                self.generate_access_token()
+                headers["access-token"] = self.jwt_token
+                response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             response.raise_for_status()
             data = response.json()
@@ -136,136 +174,98 @@ class EnhancedGEXDEXCalculator:
                 print(f"✅ Option chain received")
                 return data['data']
             else:
-                raise Exception(f"No data in response: {data}")
+                raise Exception(f"No data: {data}")
                 
         except Exception as e:
             raise Exception(f"Option chain error: {str(e)}")
     
     def get_underlying_price(self, symbol="NIFTY"):
-        """Get index price - use defaults for now"""
+        """Get index price"""
         defaults = {"NIFTY": 24500, "BANKNIFTY": 52000, "FINNIFTY": 22500, "MIDCPNIFTY": 12000}
         return defaults.get(symbol, 24500)
     
     def parse_option_chain_response(self, option_chain_data):
-        """Parse DhanHQ option chain response"""
+        """Parse option chain"""
         
         parsed_data = []
-        
-        # Get underlying LTP
         underlying_ltp = option_chain_data.get('last_price', 0)
-        print(f"💰 API Underlying LTP: {underlying_ltp}")
-        
-        # Get option chain dictionary
         oc = option_chain_data.get('oc', {})
-        
-        if not oc:
-            raise Exception("No option chain data in response")
         
         for strike_str, strike_data in oc.items():
             try:
                 strike = float(strike_str)
                 
-                # Parse CE (Call) data
                 ce_data = strike_data.get('ce', {})
-                call_oi = ce_data.get('oi', 0)
-                call_iv = ce_data.get('implied_volatility', 15)
-                call_ltp = ce_data.get('last_price', 0)
-                call_volume = ce_data.get('volume', 0)
-                
-                # Parse PE (Put) data
                 pe_data = strike_data.get('pe', {})
-                put_oi = pe_data.get('oi', 0)
-                put_iv = pe_data.get('implied_volatility', 15)
-                put_ltp = pe_data.get('last_price', 0)
-                put_volume = pe_data.get('volume', 0)
                 
                 parsed_data.append({
                     'Strike': strike,
-                    'Call_OI': int(call_oi),
-                    'Call_IV': float(call_iv) / 100 if call_iv > 1 else float(call_iv),
-                    'Call_LTP': float(call_ltp),
-                    'Call_Volume': int(call_volume),
-                    'Put_OI': int(put_oi),
-                    'Put_IV': float(put_iv) / 100 if put_iv > 1 else float(put_iv),
-                    'Put_LTP': float(put_ltp),
-                    'Put_Volume': int(put_volume)
+                    'Call_OI': int(ce_data.get('oi', 0)),
+                    'Call_IV': float(ce_data.get('implied_volatility', 15)) / 100 if ce_data.get('implied_volatility', 15) > 1 else float(ce_data.get('implied_volatility', 0.15)),
+                    'Call_LTP': float(ce_data.get('last_price', 0)),
+                    'Call_Volume': int(ce_data.get('volume', 0)),
+                    'Put_OI': int(pe_data.get('oi', 0)),
+                    'Put_IV': float(pe_data.get('implied_volatility', 15)) / 100 if pe_data.get('implied_volatility', 15) > 1 else float(pe_data.get('implied_volatility', 0.15)),
+                    'Put_LTP': float(pe_data.get('last_price', 0)),
+                    'Put_Volume': int(pe_data.get('volume', 0))
                 })
-                
-            except Exception as e:
+            except:
                 continue
         
         print(f"✅ Parsed {len(parsed_data)} strikes")
         return parsed_data, underlying_ltp
     
     def fetch_and_calculate_gex_dex(self, symbol="NIFTY", strikes_range=12, expiry_index=0):
-        """Main calculation using DhanHQ Data API"""
+        """Main calculation"""
         
         try:
             print(f"\n{'='*60}")
-            print(f"🔄 Starting {symbol} GEX/DEX Analysis")
-            print(f"{'='*60}\n")
+            print(f"🔄 Starting {symbol} Analysis")
+            print(f"{'='*60}")
             
-            # Security ID mapping
             security_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 29}
             security_id = security_map.get(symbol, 13)
-            exchange_segment = "IDX_I"
             
-            print(f"📌 Settings:")
-            print(f"   Symbol: {symbol}")
-            print(f"   Security ID: {security_id}")
-            print(f"   Exchange: {exchange_segment}")
-            print(f"   Strikes Range: ±{strikes_range}")
-            print()
+            # Get expiries
+            expiries = self.get_expiry_list(security_id, "IDX_I")
             
-            # Step 1: Get expiry list
-            expiries = self.get_expiry_list(security_id, exchange_segment)
+            if not expiries:
+                raise Exception("No expiries")
             
-            if not expiries or len(expiries) == 0:
-                raise Exception("No expiries available")
-            
-            # Select expiry
             if expiry_index >= len(expiries):
                 expiry_index = 0
             
             selected_expiry = expiries[expiry_index]
-            print(f"\n📅 Available expiries: {len(expiries)}")
-            print(f"📅 Selected expiry [{expiry_index}]: {selected_expiry}")
-            print()
+            print(f"\n📅 Selected expiry: {selected_expiry}")
             
-            # Step 2: Get option chain
-            option_chain_data = self.get_option_chain(security_id, exchange_segment, selected_expiry)
+            # Get option chain
+            option_chain_data = self.get_option_chain(security_id, "IDX_I", selected_expiry)
             
-            # Step 3: Parse option chain
+            # Parse
             parsed_data, underlying_price = self.parse_option_chain_response(option_chain_data)
             
             if not parsed_data:
-                raise Exception("No option data after parsing")
+                raise Exception("No data")
             
-            # Create DataFrame
             df = pd.DataFrame(parsed_data)
             
-            # Use API price if available, else default
-            if underlying_price == 0 or underlying_price is None:
+            if underlying_price == 0:
                 underlying_price = self.get_underlying_price(symbol)
-                print(f"⚠️ Using default price: ₹{underlying_price:,.2f}")
-            else:
-                print(f"✅ Using API price: ₹{underlying_price:,.2f}")
             
-            print()
+            print(f"💰 Price: ₹{underlying_price:,.2f}")
             
-            # Filter strikes around current price
+            # Filter strikes
             df = df[
                 (df['Strike'] >= underlying_price - strikes_range * 100) &
                 (df['Strike'] <= underlying_price + strikes_range * 100)
             ].copy()
             
             if len(df) == 0:
-                raise Exception("No strikes in selected range")
+                raise Exception("No strikes in range")
             
-            print(f"📊 Processing {len(df)} strikes (from {df['Strike'].min():.0f} to {df['Strike'].max():.0f})")
-            print()
+            print(f"📊 Processing {len(df)} strikes")
             
-            # Calculate time to expiry
+            # Time to expiry
             try:
                 expiry_date = datetime.strptime(selected_expiry, '%Y-%m-%d')
             except:
@@ -274,51 +274,23 @@ class EnhancedGEXDEXCalculator:
             days_to_expiry = max((expiry_date - datetime.now()).days, 1)
             T = days_to_expiry / 365.0
             
-            print(f"📅 Days to expiry: {days_to_expiry}")
-            print(f"📅 Time fraction: {T:.4f}")
-            print()
-            
             # Calculate Greeks
-            print(f"🔢 Calculating Greeks...")
-            df['Call_Gamma'] = df.apply(
-                lambda r: self.bs_calc.calculate_gamma(
-                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01)
-                ), axis=1
-            )
+            df['Call_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01)), axis=1)
+            df['Put_Gamma'] = df.apply(lambda r: self.bs_calc.calculate_gamma(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01)), axis=1)
+            df['Call_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'), axis=1)
+            df['Put_Delta'] = df.apply(lambda r: self.bs_calc.calculate_delta(underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01), 'put'), axis=1)
             
-            df['Put_Gamma'] = df.apply(
-                lambda r: self.bs_calc.calculate_gamma(
-                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01)
-                ), axis=1
-            )
-            
-            df['Call_Delta'] = df.apply(
-                lambda r: self.bs_calc.calculate_delta(
-                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Call_IV'], 0.01), 'call'
-                ), axis=1
-            )
-            
-            df['Put_Delta'] = df.apply(
-                lambda r: self.bs_calc.calculate_delta(
-                    underlying_price, r['Strike'], T, self.risk_free_rate, max(r['Put_IV'], 0.01), 'put'
-                ), axis=1
-            )
-            
-            # GEX calculations
-            print(f"📊 Calculating GEX...")
+            # GEX/DEX
             df['Call_GEX'] = df['Call_Gamma'] * df['Call_OI'] * underlying_price * underlying_price * 0.01
             df['Put_GEX'] = df['Put_Gamma'] * df['Put_OI'] * underlying_price * underlying_price * 0.01 * -1
             df['Net_GEX'] = df['Call_GEX'] + df['Put_GEX']
             df['Net_GEX_B'] = df['Net_GEX'] / 1e9
             
-            # DEX calculations
-            print(f"📊 Calculating DEX...")
             df['Call_DEX'] = df['Call_Delta'] * df['Call_OI'] * underlying_price * 0.01
             df['Put_DEX'] = df['Put_Delta'] * df['Put_OI'] * underlying_price * 0.01
             df['Net_DEX'] = df['Call_DEX'] + df['Put_DEX']
             df['Net_DEX_B'] = df['Net_DEX'] / 1e9
             
-            # Hedging pressure
             total_gex = df['Net_GEX'].abs().sum()
             df['Hedging_Pressure'] = (df['Net_GEX'] / total_gex * 100) if total_gex > 0 else 0
             df['Total_Volume'] = df['Call_Volume'] + df['Put_Volume']
@@ -332,21 +304,14 @@ class EnhancedGEXDEXCalculator:
                 'atm_straddle_premium': atm_row['Call_LTP'] + atm_row['Put_LTP']
             }
             
-            print()
-            print(f"{'='*60}")
-            print(f"✅ CALCULATION COMPLETE!")
-            print(f"{'='*60}")
-            print(f"   Total Net GEX: {df['Net_GEX_B'].sum():.4f}B")
-            print(f"   ATM Strike: {atm_info['atm_strike']}")
-            print(f"   ATM Straddle: ₹{atm_info['atm_straddle_premium']:.2f}")
+            print(f"\n✅ COMPLETE!")
             print(f"{'='*60}\n")
             
-            return df, underlying_price, "DhanHQ Data API", atm_info
+            return df, underlying_price, "DhanHQ API", atm_info
             
         except Exception as e:
-            error_msg = str(e)
-            print(f"\n❌ ERROR: {error_msg}\n")
-            raise Exception(error_msg)
+            print(f"\n❌ ERROR: {str(e)}\n")
+            raise Exception(str(e))
 
 def calculate_dual_gex_dex_flow(df, futures_ltp):
     try:
