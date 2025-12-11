@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
-import time
 import pytz
 
 # Import calculator
@@ -13,6 +12,17 @@ try:
 except Exception as e:
     CALCULATOR_AVAILABLE = False
     IMPORT_ERROR = str(e)
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title="NYZTrade - GEX Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================================================
 # AUTHENTICATION
@@ -80,17 +90,6 @@ def get_ist_time():
     ist = pytz.timezone('Asia/Kolkata')
     return datetime.now(ist)
 
-# ============================================================================
-# PAGE CONFIGURATION
-# ============================================================================
-
-st.set_page_config(
-    page_title="NYZTrade - GEX Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 # Check authentication
 if not check_password():
     st.stop()
@@ -145,27 +144,62 @@ if st.sidebar.button("🚪 Logout"):
     st.rerun()
 
 # ============================================================================
-# DHAN CREDENTIALS
+# DHAN CREDENTIALS - FIXED VERSION
 # ============================================================================
 
+DHAN_CLIENT_ID = None
+DHAN_ACCESS_TOKEN = None
+
+# Debug: Show what secrets are available
 try:
-    DHAN_CLIENT_ID = st.secrets["dhan_client_id"]
-    DHAN_ACCESS_TOKEN = st.secrets["dhan_access_token"]
-    st.sidebar.success(f"✅ DhanHQ Connected")
-    st.sidebar.caption(f"Client: {DHAN_CLIENT_ID}")
+    st.sidebar.write("🔍 Debug Info:")
+    if hasattr(st, 'secrets'):
+        available_keys = list(st.secrets.keys()) if hasattr(st.secrets, 'keys') else []
+        st.sidebar.caption(f"Available keys: {available_keys}")
+    else:
+        st.sidebar.caption("No secrets object found")
 except:
-    DHAN_CLIENT_ID = None
-    DHAN_ACCESS_TOKEN = None
-    st.sidebar.error("❌ DhanHQ Not Connected")
+    pass
+
+# Try to load credentials
+try:
+    # Method 1: Direct access (no section)
+    if 'dhan_client_id' in st.secrets:
+        DHAN_CLIENT_ID = str(st.secrets['dhan_client_id']).strip()
+        DHAN_ACCESS_TOKEN = str(st.secrets['dhan_access_token']).strip()
+        st.sidebar.success(f"✅ DhanHQ Connected")
+        st.sidebar.caption(f"Client: {DHAN_CLIENT_ID}")
+    else:
+        st.sidebar.error("❌ Keys not found in secrets")
+        
+except Exception as e:
+    st.sidebar.error(f"❌ Error: {str(e)}")
+
+# If no credentials, show error
+if not DHAN_CLIENT_ID or not DHAN_ACCESS_TOKEN:
     st.error("""
-    ### ⚠️ DhanHQ API Credentials Required
+    ### ⚠️ DhanHQ API Credentials Not Found
     
-    Please configure your DhanHQ credentials in Streamlit Secrets:
-```toml
-    dhan_client_id = "YOUR_CLIENT_ID"
-    dhan_access_token = "YOUR_ACCESS_TOKEN"
+    **Steps to Fix:**
+    
+    1. Go to: **☰ Menu → Manage app → Settings → Secrets**
+    
+    2. **Delete everything** in the secrets box
+    
+    3. **Copy and paste** these two lines EXACTLY:
 ```
+    dhan_client_id = "1100480354"
+    dhan_access_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJkaGFuIiwicGFydG5lcklkIjoiIiwiZXhwIjoxNzY1NDgzNzg3LCJhcHBfaWQiOiI4NjFmZjMyMSIsImlhdCI6MTc2NTM5NzM4NywidG9rZW5Db25zdW1lclR5cGUiOiJBUFAiLCJ3ZWJob29rVXJsIjoiIiwiZGhhbkNsaWVudElkIjoiMTEwMDQ4MDM1NCJ9.XDHIi24skiRDG3Uc6CFA-eZVadHfuPIounKW0eFiFpJrRoAplaGS2sXzpI5c0ndrmL-Ee72NnBqqyEG2UPqjKg"
+```
+    
+    4. Click **"Save"**
+    
+    5. **Wait 2 minutes** for the app to restart
+    
+    6. **Refresh** your browser (Ctrl+Shift+R)
     """)
+    
+    st.info("💡 **Tip:** Make sure there are NO extra spaces, quotes, or [sections] in your secrets!")
     st.stop()
 
 # ============================================================================
@@ -252,9 +286,9 @@ if error:
         **Common Issues:**
         
         1. **Market Closed**: Try during 9:15 AM - 3:30 PM IST
-        2. **Token Expired**: Access tokens expire every 24 hours. Regenerate at https://www.dhan.co/
-        3. **Rate Limit**: DhanHQ allows 1 request per 3 seconds
-        4. **Data APIs**: Ensure Data APIs are enabled in your Dhan account
+        2. **Token Expired**: Access tokens expire after 24 hours
+        3. **Rate Limit**: Wait 3 seconds between requests
+        4. **Data APIs**: Enable Data APIs in Dhan account
         """)
     st.stop()
 
@@ -335,12 +369,7 @@ except:
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 GEX Profile",
-    "📈 DEX Profile",
-    "📋 Data Table",
-    "💡 Strategies"
-])
+tab1, tab2, tab3 = st.tabs(["📊 GEX Profile", "📈 DEX Profile", "📋 Data Table"])
 
 # TAB 1: GEX Profile
 with tab1:
@@ -358,13 +387,7 @@ with tab1:
         hovertemplate='<b>Strike:</b> %{y}<br><b>GEX:</b> %{x:.4f}B<extra></extra>'
     ))
     
-    fig.add_hline(
-        y=futures_ltp,
-        line_dash="dash",
-        line_color="blue",
-        line_width=3,
-        annotation_text=f"Current: ₹{futures_ltp:,.0f}"
-    )
+    fig.add_hline(y=futures_ltp, line_dash="dash", line_color="blue", line_width=3)
     
     fig.update_layout(
         height=600,
@@ -374,14 +397,6 @@ with tab1:
     )
     
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Interpretation
-    if total_gex > 0.5:
-        st.success("🟢 **Strong Positive GEX**: Market likely sideways to bullish. Consider premium selling.")
-    elif total_gex < -0.5:
-        st.error("🔴 **Negative GEX**: High volatility expected. Consider volatility strategies.")
-    else:
-        st.warning("⚖️ **Neutral GEX**: Mixed signals. Follow DEX for direction.")
 
 # TAB 2: DEX Profile
 with tab2:
@@ -395,8 +410,7 @@ with tab2:
         x=df['Net_DEX_B'],
         orientation='h',
         marker_color=dex_colors,
-        name='Net DEX',
-        hovertemplate='<b>Strike:</b> %{y}<br><b>DEX:</b> %{x:.4f}B<extra></extra>'
+        name='Net DEX'
     ))
     
     fig2.add_hline(y=futures_ltp, line_dash="dash", line_color="blue", line_width=3)
@@ -426,46 +440,20 @@ with tab3:
         mime="text/csv"
     )
 
-# TAB 4: Strategies
-with tab4:
-    st.subheader("💡 Trading Strategies")
-    
-    if flow_metrics and atm_info:
-        gex_val = flow_metrics['gex_near_total']
-        
-        if gex_val > 50:
-            st.success("### 🟢 Iron Condor Strategy")
-            st.markdown(f"""
-            **Setup:** Sell {symbol} {int(futures_ltp)} CE + PE, Buy {int(futures_ltp + 200)} CE + {int(futures_ltp - 200)} PE
-            
-            **Risk:** Moderate | **Best Range:** ±₹100
-            """)
-        elif gex_val < -50:
-            st.error("### 🔴 Long Straddle Strategy")
-            st.markdown(f"""
-            **Setup:** Buy {symbol} {atm_info['atm_strike']} CE + PE
-            
-            **Cost:** ₹{atm_info['atm_straddle_premium']:.2f} | **Risk:** High
-            """)
-        else:
-            st.warning("### ⚖️ Wait for Clarity")
-
 # ============================================================================
 # FOOTER
 # ============================================================================
 
 st.markdown("---")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 ist_time = get_ist_time()
 
 with col1:
     st.info(f"⏰ {ist_time.strftime('%H:%M:%S')} IST")
 with col2:
-    st.info(f"📅 {ist_time.strftime('%d %b %Y')}")
-with col3:
     st.info(f"📊 {symbol}")
-with col4:
+with col3:
     st.success(f"✅ {fetch_method}")
 
 st.markdown(f"**💡 NYZTrade YouTube | Powered by DhanHQ**")
